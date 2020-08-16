@@ -115,11 +115,12 @@ help_print() {
 
 
 host_check_session() {
-    local _check _cmd _host _pid _socket _status
+    local _check _cmd _host _port _pid _socket _status
     local -i _es
-    _host=${1}
-    _socket=${2:-}
-    if _check=$(session_check "${_host}" || exit ${?})
+    _host="${1}"
+    _port="${2}"
+    _socket="${3:-}"
+    if _check=$(session_check "${_host}" "${_port}" || exit ${?})
     then
         echo "${WHT}${_host}${RST}"
         _pid="${_check%)}"
@@ -156,6 +157,7 @@ host_from_socket() {
     if [[ "${_socket}" =~ ${HOST_REGEX} ]]
     then
         _hostname="${BASH_REMATCH[1]}"
+        _port="${BASH_REMATCH[2]:-22}"
         _host="$(awk \
             "tolower(\$0) ~ /^[[:space:]]*host[[:space:]]+/ {
                 host=\$2
@@ -167,14 +169,14 @@ host_from_socket() {
         then
             _host="${_hostname}"
         fi
-        echo "${_host}"
+        echo "${_host}:${_port}"
     else
         {
             echo "${YLW}WARNING: cannot match host from socket name${RST}"
             echo "  regex pattern: ${HOST_REGEX}"
             echo "  socket: ${_socket}"
         } 1>&2
-        echo 'HOSTNAME'
+        echo 'HOSTNAME:PORT'
     fi
     return 0
 }
@@ -194,11 +196,12 @@ print_debug_info() {
 
 session_check() {
     # Check ControlMaster connection status
-    local _cmd _host _msg _pid _result _socket _start
+    local _cmd _host _port _msg _pid _result _socket _start
     local -i _es
     _host="${1}"
-    _socket="${2:-}"
-    _result="$(ssh -O check "${_host}" 2>&1 || exit ${?})" || _es="${?}"
+    _port="${2}"
+    _socket="${3:-}"
+    _result="$(ssh -p ${_port} -O check "${_host}" 2>&1 || exit ${?})" || _es="${?}"
     _result="$(strip_clean "${_result}")"
     if (( ${_es:-0} != 0 ))
     then
@@ -227,10 +230,11 @@ session_check() {
 
 session_exit() {
     # Exit an existing ControlMaster process
-    local _host _result _socket
+    local _host _port _result _socket
     local -i _es
     _host="${1}"
-    if _result=$(session_check "${_host}" || exit ${?})
+    _port="${2}"
+    if _result=$(session_check "${_host}" "${_port}" || exit ${?})
     then
         : # success, no-op
     else
@@ -240,7 +244,7 @@ session_exit() {
     fi
     echo "${WHT}${_host}${RST}"
     echo '  Closing ControlMaster connection'
-    _result="$(ssh -O exit "${_host}" 2>&1)"
+    _result="$(ssh -p ${_port} -O exit "${_host}" 2>&1)"
     _result=$(strip_clean "${_result}" || true)
     echo "  ${_result}"
 }
@@ -261,7 +265,9 @@ session_all_exit() {
             _estat=0
             (( _i > 0 )) && echo
             _host=$(host_from_socket "${_socket}")
-            _result=$(session_exit "${_host}") || _estat=4
+            _port=${_host##*:}
+            _host=${_host%%:*}
+            _result=$(session_exit "${_host}" "${_port}") || _estat=4
             _es="${_estat}"
             if [[ "${_result}" == 'BREAK' ]]
             then
@@ -284,7 +290,8 @@ set_control_path_based_globals() {
     CONTROL_PATH="$(config_control_path)"
     CONTROL_GLOB=${CONTROL_PATH//%?/*}
     CONTROL_GLOB=${CONTROL_GLOB/\~/${HOME}}
-    HOST_REGEX=${CONTROL_PATH//%h/(.*)}
+    HOST_REGEX=${CONTROL_PATH//%r@%h/(.*)}
+    HOST_REGEX=${HOST_REGEX//%p/(.*)}
     HOST_REGEX=${HOST_REGEX//%?/.*}
     HOST_REGEX=${HOST_REGEX//\~/~}
 }
@@ -319,7 +326,9 @@ sockets_display() {
         do
             (( _i > 0 )) && echo
             _host=$(host_from_socket "${_socket}")
-            _result=$(host_check_session "${_host}" || exit ${?})
+            _port=${_host##*:}
+            _host=${_host%%:*}
+            _result=$(host_check_session "${_host}" "${_port}" || exit ${?})
             _es=${?}
             if [[ "${_result}" == 'BREAK' ]]
             then
@@ -439,7 +448,8 @@ case "${ACTION:-}" in
         do
             (( _i > 0 )) && echo
             declare -i estat
-            result=$(host_check_session "${_host}" || exit ${?}) || estat=${?}
+            # FIXME support custom ports
+            result=$(host_check_session "${_host}" 22 || exit ${?}) || estat=${?}
             ES="${estat}"
             if [[ "${result}" == 'BREAK' ]]
             then
@@ -464,7 +474,8 @@ case "${ACTION:-}" in
         do
             (( _i > 0 )) && echo
             declare -i estat
-            result=$(session_exit "${_host}" || exit ${?}) || estat=${?}
+            # FIXME support custom ports
+            result=$(session_exit "${_host}" 22 || exit ${?}) || estat=${?}
             ES="${estat}"
             if [[ "${result}" == 'BREAK' ]]
             then
